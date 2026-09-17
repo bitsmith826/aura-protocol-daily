@@ -1,0 +1,5 @@
+# Masukkan daftar token 'aura_token' di bawah ini, satu baris untuk satu akun
+# Format token disalin dari tab Application -> Cookies (aura_token) di browser
+# Contoh:
+0xcontoh_token_akun_1_panjang...%3A0xWalletAddress1
+0xcontoh_token_akun_2_panjang...%3A0xWalletAddress2

@@ -49,7 +49,7 @@ Langkah-langkah detailnya:
 - Pastikan Anda sudah menginstal **Node.js** (rekomendasi versi 18 ke atas, cek dengan perintah `node -v`).
 
 ### 2. Konfigurasi Token & AI Solver (Opsional)
-- **Token Akun**: Buka file `tokens.txt`, lalu masukkan token yang sudah Anda dapatkan. Masukkan **satu token per baris** jika memiliki banyak akun:
+- **Token Akun**: Buat file `tokens.txt` (atau copy dari `tokens.txt.example`), lalu masukkan token yang sudah Anda dapatkan. Masukkan **satu token per baris** jika memiliki banyak akun:
   ```text
   # tokens.txt
   0x681615681b0c66d6...%3A0x728F58C4f8dB2D6f3646048624f5C3a86F29De7F
@@ -83,9 +83,12 @@ Bot akan otomatis membersihkan layar terminal, memproses setiap akun satu per sa
 
 ```text
 aura-protocol-daily/
-├── index.js          # Script utama (fetch API, solver kuis, UI terminal)
-├── tokens.txt        # Daftar aura_token pengguna (1 baris per akun)
-├── package.json      # Konfigurasi proyek Node.js (ES Module)
-├── .gitignore        # Mencegah tokens.txt & file sensitif ter-commit
-└── README.md         # Dokumentasi proyek
+├── index.js            # Script utama (fetch API, solver kuis, UI terminal)
+├── tokens.txt.example  # Contoh template file token
+├── tokens.txt          # Daftar token akun Anda (diabaikan oleh git)
+├── .env.example        # Contoh template environment
+├── .env                # File konfigurasi API Key (diabaikan oleh git)
+├── package.json        # Konfigurasi proyek Node.js (ES Module)
+├── .gitignore          # Mencegah tokens.txt & file sensitif ter-commit
+└── README.md           # Dokumentasi proyek
 ```
