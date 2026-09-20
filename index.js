@@ -143,23 +143,42 @@ async function submitQuizAnswer(token, quizId, answerIndex) {
   return res.json();
 }
 
-// Cache jawaban kuis terverifikasi antar akun dalam satu kali jalan
+// Cache jawaban kuis:
+// 1. verifiedQuizCache: menyimpan index jawaban yang TERBUKTI BENAR
+// 2. failedAnswersCache: menyimpan index-index yang TERBUKTI SALAH (Blacklist)
 const verifiedQuizCache = new Map();
+const failedAnswersCache = new Map();
 
-// Panggil Google Gemini AI API secara native via fetch
-async function askGeminiAI(question, options, apiKey) {
-  const prompt = `You are an expert in Web3, cryptocurrency, and blockchain technology.
+// Panggil Google Gemini AI API secara native dengan output JSON terstruktur
+async function askGeminiAI(question, options, apiKey, excludedIndices = new Set()) {
+  const availableOptions = options.map((opt, idx) => {
+    const k = Object.keys(opt)[0];
+    const isExcluded = excludedIndices.has(idx);
+    return `[${idx}] (${k.toUpperCase()}) ${opt[k]}${isExcluded ? ' -> [TERBUKTI SALAH / BLACKLIST]' : ''}`;
+  }).join('\n');
+
+  let blacklistNotice = '';
+  if (excludedIndices.size > 0) {
+    const listStr = Array.from(excludedIndices).map((i) => `Index ${i}`).join(', ');
+    blacklistNotice = `\nPERHATIAN KHUSUS: Pilihan (${listStr}) sudah pernah dicoba dan TERBUKTI SALAH oleh akun sebelumnya. JANGAN PILIH (${listStr})! Pilih dari opsi lain yang masih valid.\n`;
+  }
+
+  const prompt = `You are a world-class Web3, cryptocurrency, and blockchain expert.
 Answer the following multiple-choice quiz question correctly.
 
 Question: "${question}"
 
 Options:
-${options.map((opt, idx) => {
-  const k = Object.keys(opt)[0];
-  return `[${idx}] (${k.toUpperCase()}) ${opt[k]}`;
-}).join('\n')}
+${availableOptions}
+${blacklistNotice}
+INSTRUCTION:
+Analyze carefully and return a JSON object with:
+- "correctIndex": the integer index (0, 1, 2, or 3) of the correct option. Do NOT select any index that is marked as [TERBUKTI SALAH / BLACKLIST].
+- "reason": short explanation of why this answer is correct.
 
-INSTRUCTION: Respond with ONLY a single digit (0, 1, 2, or 3) indicating the index of the correct option. Do NOT output any other words or punctuation.`;
+Example output format:
+{"correctIndex": 1, "reason": "Explanation"}
+`;
 
   const models = ['gemini-flash-latest', 'gemini-pro-latest', 'gemini-2.5-flash'];
   for (const model of models) {
@@ -170,17 +189,22 @@ INSTRUCTION: Respond with ONLY a single digit (0, 1, 2, or 3) indicating the ind
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.0, maxOutputTokens: 5 }
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json'
+          }
         })
       });
 
       if (!res.ok) continue;
 
       const data = await res.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
-      const match = text.match(/\b([0-3])\b/);
-      if (match) {
-        return parseInt(match[1], 10);
+      const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+      const parsed = JSON.parse(rawText);
+      const picked = Number(parsed.correctIndex);
+
+      if (!isNaN(picked) && picked >= 0 && picked < options.length && !excludedIndices.has(picked)) {
+        return picked;
       }
     } catch {
       // Coba model berikutnya jika gagal
@@ -190,7 +214,7 @@ INSTRUCTION: Respond with ONLY a single digit (0, 1, 2, or 3) indicating the ind
 }
 
 // Deteksi Jawaban menggunakan Rule Engine Web3 kata kunci
-function detectAnswerByRules(question, options) {
+function detectAnswerByRules(question, options, excludedIndices = new Set()) {
   const q = question.toLowerCase();
 
   const rules = [
@@ -211,6 +235,7 @@ function detectAnswerByRules(question, options) {
   for (const rule of rules) {
     if (rule.match.test(q)) {
       for (let i = 0; i < options.length; i++) {
+        if (excludedIndices.has(i)) continue; // Lewati yang sudah terbukti salah
         const text = Object.values(options[i])[0];
         if (rule.answerMatch.test(text)) {
           return i;
@@ -222,35 +247,48 @@ function detectAnswerByRules(question, options) {
   return -1;
 }
 
-// Resolver Utama: Cache Terverifikasi -> Gemini AI -> Rule Engine
+// Resolver Utama: Cache Terverifikasi -> Gemini AI -> Rule Engine -> Eliminasi Cerdas
 async function resolveQuizAnswer(quizId, question, options) {
-  // 1. Cek cache terverifikasi dari akun sebelumnya
+  // 1. Cek cache terverifikasi dari akun sebelumnya (100% Benar)
   if (verifiedQuizCache.has(quizId)) {
     return {
       index: verifiedQuizCache.get(quizId),
-      source: 'Verified Cache (Akun Sebelumnya)'
+      source: 'Verified Cache (100% Akurat dari Akun Sebelumnya)'
     };
   }
 
-  // 2. Jika ada GEMINI_API_KEY, tanyakan ke AI
+  const excluded = failedAnswersCache.get(quizId) || new Set();
+
+  // 2. Jika ada GEMINI_API_KEY, tanyakan ke AI (dengan filter blacklist)
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (apiKey) {
-    const aiIndex = await askGeminiAI(question, options, apiKey);
-    if (aiIndex >= 0 && aiIndex < options.length) {
+    const aiIndex = await askGeminiAI(question, options, apiKey, excluded);
+    if (aiIndex >= 0 && aiIndex < options.length && !excluded.has(aiIndex)) {
+      const extraNotice = excluded.size > 0 ? ` [Eliminasi ${excluded.size} opsi salah]` : '';
       return {
         index: aiIndex,
-        source: 'Google Gemini AI'
+        source: `Google Gemini AI${extraNotice}`
       };
     }
   }
 
-  // 3. Fallback: Gunakan Web3 Rule Engine
-  const ruleIndex = detectAnswerByRules(question, options);
-  if (ruleIndex !== -1) {
+  // 3. Fallback: Gunakan Web3 Rule Engine (dengan filter blacklist)
+  const ruleIndex = detectAnswerByRules(question, options, excluded);
+  if (ruleIndex !== -1 && !excluded.has(ruleIndex)) {
     return {
       index: ruleIndex,
       source: 'Web3 Rule Engine'
     };
+  }
+
+  // 4. Strategi Eliminasi: Ambil opsi pertama yang BELUM PERNAH dicoba salah
+  for (let i = 0; i < options.length; i++) {
+    if (!excluded.has(i)) {
+      return {
+        index: i,
+        source: 'Smart Elimination (Opsi Tersisa)'
+      };
+    }
   }
 
   return {
@@ -394,8 +432,14 @@ async function main() {
             accResult.quizStatus = `+${quiz.points} Poin`;
             console.log(`  ${c.tagSuccess('QUIZ')} ${c.bGreen}Jawaban BENAR! Mendapatkan +${quiz.points} points!${c.reset}`);
           } else {
-            accResult.quizStatus = 'Salah/Gagal';
-            console.log(`  ${c.tagWarn('QUIZ')} ${c.red}Jawaban tidak tepat atau sudah disubmit.${c.reset}`);
+            // Catat index ini ke blacklist agar akun berikutnya TIDAK AKAN PERNAH memilih opsi salah ini lagi
+            if (!failedAnswersCache.has(quiz.id)) {
+              failedAnswersCache.set(quiz.id, new Set());
+            }
+            failedAnswersCache.get(quiz.id).add(ansIndex);
+
+            accResult.quizStatus = 'Salah';
+            console.log(`  ${c.tagWarn('QUIZ')} ${c.red}Jawaban Index ${ansIndex} tidak tepat. Opsi ini DI-BLACKLIST untuk akun berikutnya!${c.reset}`);
           }
         } else {
           accResult.quizStatus = 'Manual';
